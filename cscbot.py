@@ -1,17 +1,10 @@
-import re
+import importlib
+import os
 import slackbot.bot as slackbot
+from lib import Message
 
 bot = None
 last_messages = {}
-
-PATTERN_ALL = r".*"
-PATTERN_REGEX = r"^s\/([^\/]+)\/([^\/]+)[\/]?$"
-
-class Message:
-    def __init__(self, raw_msg):
-        self.channel = raw_msg.body["channel"]
-        self.user = raw_msg.body["user"]
-        self.text = raw_msg.body["text"]
 
 class Bot:
     def __init__(self, slack_bot):
@@ -37,35 +30,34 @@ class CSCBot:
     def __init__(self):
         self.slackbot = slackbot.Bot()
         self.bot = Bot(self.slackbot)
+        self.commands = []
+        self.init_commands()
+
+    def init_commands(self):
+        command_dir = "commands/"
+        command_files = os.listdir(command_dir)
+        for command_file in command_files:
+            if not command_file.endswith(".py"):
+                continue
+            command = importlib.import_module("{}{}".format(command_dir, command_file.replace(".py", "")).replace("/", ".")).Command(self)
+            self.commands.append(command)
 
     def on_message(self, raw_msg):
-        msg = Message(raw_msg)
-        if not msg.channel in last_messages:
-            last_messages[msg.channel] = {}
-        if not re.match(PATTERN_REGEX, msg.text):
-            last_messages[msg.channel][msg.user] = msg.text
-
-    def on_regex(self, raw_msg, pattern, replace):
-        msg = Message(raw_msg)
-        if not msg.channel in last_messages:
-            return
-        if not msg.user in last_messages[msg.channel]:
-            return
-        last_message = last_messages[msg.channel][msg.user]
-        new_message = re.sub(pattern, replace, last_message)
-        last_messages[msg.channel][msg.user] = new_message
-        raw_msg.reply(new_message)
+        msg = Message(raw_msg, {})
+        for command in self.commands:
+            if "handle_default" in dir(command):
+                command.handle_default(msg)
+            regex_results = command.regex.findall(msg.text)
+            if len(regex_results) > 0 and len(regex_results[0]) > 0:
+                for index, param_name in enumerate(command.params):
+                    msg.params[param_name] = regex_results[0][index]
+                command.handle(msg)
 
 # Necessary because slackbot doesn't pass `self` to methods
-@slackbot.respond_to(PATTERN_ALL)
-@slackbot.listen_to(PATTERN_ALL)
+@slackbot.respond_to(r".*")
+@slackbot.listen_to(r".*")
 def on_default(msg):
     return bot.on_message(msg)
-
-@slackbot.respond_to(PATTERN_REGEX)
-@slackbot.listen_to(PATTERN_REGEX)
-def on_regex(msg, pattern, replace):
-    return bot.on_regex(msg, pattern, replace)
 
 def main():
     # pylint: disable=W0603
